@@ -6,14 +6,12 @@
 
 "use strict";
 
-import Web3 from "web3";
 import RPCServer from "./rpc";
 import ProviderRpcError from "./error";
 import Utils from "./utils";
 import IdMapping from "./id_mapping";
 import { EventEmitter } from "events";
 import isUtf8 from "isutf8";
-import { TypedDataUtils } from "eth-sig-util";
 
 class TrustWeb3Provider extends EventEmitter {
   constructor(config) {
@@ -23,7 +21,8 @@ class TrustWeb3Provider extends EventEmitter {
     this.idMapping = new IdMapping();
     this.callbacks = new Map();
     this.wrapResults = new Map();
-    this.isTrust = true;
+    this.isMetaMask = true;
+    this.isTokenary = true;
     this.isDebug = !!config.isDebug;
 
     this.emitConnect(config.chainId);
@@ -35,7 +34,7 @@ class TrustWeb3Provider extends EventEmitter {
     this.ready = !!address;
     for (var i = 0; i < window.frames.length; i++) {
       const frame = window.frames[i];
-      if (frame.ethereum && frame.ethereum.isTrust) {
+      if (frame.ethereum && frame.ethereum.isTokenary) {
         frame.ethereum.address = lowerAddress;
         frame.ethereum.ready = !!address;
       }
@@ -73,7 +72,9 @@ class TrustWeb3Provider extends EventEmitter {
     console.log(
       'enable() is deprecated, please use window.ethereum.request({method: "eth_requestAccounts"}) instead.'
     );
-    return this.request({ method: "eth_requestAccounts", params: [] });
+    if (!window.ethereum.address) { // avoid double accounts request in uniswap
+      return this.request({ method: "eth_requestAccounts", params: [] });
+    }
   }
 
   /**
@@ -186,7 +187,6 @@ class TrustWeb3Provider extends EventEmitter {
             `Trust does not support calling ${payload.method}. Please use your own solution`
           );
         default:
-          // call upstream rpc
           this.callbacks.delete(payload.id);
           this.wrapResults.delete(payload.id);
           return this.rpc
@@ -252,10 +252,7 @@ class TrustWeb3Provider extends EventEmitter {
   }
 
   eth_signTypedData(payload, useV4) {
-    const message = JSON.parse(payload.params[1]);
-    const hash = TypedDataUtils.sign(message, useV4);
     this.postMessage("signTypedMessage", payload.id, {
-      data: "0x" + hash.toString("hex"),
       raw: payload.params[1],
     });
   }
@@ -291,6 +288,7 @@ class TrustWeb3Provider extends EventEmitter {
         id: id,
         name: handler,
         object: data,
+        address: this.address,
       };
       if (window.trustwallet.postMessage) {
         window.trustwallet.postMessage(object);
@@ -358,6 +356,41 @@ class TrustWeb3Provider extends EventEmitter {
 
 window.trustwallet = {
   Provider: TrustWeb3Provider,
-  Web3: Web3,
   postMessage: null,
 };
+
+(function() {
+    var config = {
+    chainId: 1, // "0x1" works for Zerion
+    rpcUrl: "https://mainnet.infura.io/v3/<KEY>",
+    isDebug: true
+    };
+    window.ethereum = new trustwallet.Provider(config);
+
+    const handler = {
+      get(target, property) {
+        return window.ethereum;
+      }
+    }
+    window.web3 = new Proxy(window.ethereum, handler);
+
+    trustwallet.postMessage = (jsonString) => {
+        window.postMessage({direction: "from-page-script", message: jsonString}, "*");
+    };
+})();
+
+window.addEventListener("message", function(event) {
+    if (event.source == window && event.data && event.data.direction == "from-content-script") {
+        const response = event.data.response;
+        if ("result" in response) {
+          window.ethereum.sendResponse(event.data.id, response.result);
+        } else if ("results" in response) {
+          window.ethereum.sendResponse(event.data.id, response.results);
+          if (response.setAddress == true) {
+            window.ethereum.setAddress(response.results[0]);
+          }
+        } else if ("error" in response) {
+          window.ethereum.sendError(event.data.id, response.error);
+        }
+    }
+});

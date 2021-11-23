@@ -11,20 +11,6 @@ class RPCServer {
     this.rpcUrl = rpcUrl;
   }
 
-  getBlockNumber() {
-    return this.call({jsonrpc: "2.0", method: "eth_blockNumber", params: []})
-    .then(json => json.result);
-  }
-
-  getBlockByNumber(number) {
-    return this.call({jsonrpc: "2.0", method: "eth_getBlockByNumber", params: [number, false]})
-    .then(json => json.result);
-  }
-
-  getFilterLogs(filter) {
-    return this.call({jsonrpc: "2.0", method: "eth_getLogs", params: [filter]});
-  }
-
   call(payload) {
     return fetch(this.rpcUrl, {
       method: "POST",
